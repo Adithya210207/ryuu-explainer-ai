@@ -83,15 +83,16 @@ python Ryuu_ai.py
 
 ## 📄 Copyright & Terms of Use
 
-© 2026 Adithya V. All Rights Reserved.
+**© 2025–2026 Adithya V. All Rights Reserved.**
 
-This repository is published for portfolio and educational purposes.
-You may view the source code to understand the implementation.
+This repository is published for portfolio, demonstration, and educational viewing purposes only. You are welcome to view the source code to understand the implementation.
 
-You may NOT:
-- Copy substantial portions of this project.
-- Redistribute or republish this project.
-- Use this code in commercial or academic work without prior permission.
-- Present this work as your own.
+### You may NOT:
 
-If you'd like to use any part of this project, please contact me first.
+- Copy or reproduce substantial portions of this project.
+- Redistribute, republish, or mirror this repository.
+- Use this code in commercial projects without prior written permission.
+- Submit this code, or substantially similar code, as your own for academic purposes.
+- Remove copyright notices or claim this work as your own.
+
+If you would like to use any part of this project, please contact me first for permission.
