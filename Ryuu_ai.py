@@ -56,9 +56,11 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 OLLAMA_URL       = "http://localhost:11434"
-DEFAULT_MODEL    = "qwen3:8b"
+DEFAULT_MODEL    = "gemma4:12b"   # reads images AND writes code — no model swap needed
 DEFAULT_TOKENS   = -1          # -1 = let the model finish its full answer
-DEFAULT_CTX      = 32768       # context window (tokens Ryuu can "see" at once)
+DEFAULT_CTX      = 16384       # context window (tokens Ryuu can "see" at once).
+                               # 16K keeps 12-14B models fully on the Arc GPU; 32K can
+                               # spill onto the CPU. Raise it in ⚙ Settings if needed.
 DEFAULT_TEMP     = 0.5
 DEFAULT_HISTORY  = 16          # turns of prior messages kept in memory
 DEFAULT_STREAM   = True
@@ -70,9 +72,13 @@ MAX_CONTINUATIONS = 6          # safety cap on auto-continue rounds (see chat())
 # sending images, since a text-only model will just ignore/hallucinate them.
 VISION_MODEL_HINTS = [
     "llava", "bakllava", "moondream", "minicpm-v", "qwen2-vl", "qwen2.5vl",
-    "qwen2.5-vl", "llama3.2-vision", "llama3.2-vl", "gemma3", "pixtral",
-    "vision", "vl",
+    "qwen2.5-vl", "llama3.2-vision", "llama3.2-vl", "gemma3", "gemma4",
+    "qwen3.5", "qwen3-vl", "pixtral", "vision", "vl",
 ]
+
+# When an image is attached to a text-only model, Ryuu borrows a vision model
+# for that one reply. Best first.
+PREFERRED_VISION_MODELS = ["gemma4", "qwen3.5", "qwen3-vl", "qwen2.5vl", "gemma3"]
 
 
 def is_vision_model(name: str) -> bool:
@@ -83,22 +89,34 @@ def is_vision_model(name: str) -> bool:
 # "name" must match (or prefix-match) the tag Ollama reports for that model.
 MODEL_CATALOG = [
     {
-        "name": "qwen3:8b",
-        "label": "Qwen3 8B",
-        "desc": "General reasoning & everyday chat",
-        "icon": "🧠",
+        "name": "gemma4:12b",
+        "label": "Gemma 4 12B",
+        "desc": "Default — reads images and writes code",
+        "icon": "✨",
     },
     {
-        "name": "qwen2.5-coder:7b",
-        "label": "Qwen2.5 Coder 7B",
-        "desc": "Writing & debugging code",
+        "name": "qwen2.5-coder:14b",
+        "label": "Qwen2.5 Coder 14B",
+        "desc": "Best for writing & debugging code (text only)",
         "icon": "💻",
     },
     {
-        "name": "qwen2.5vl:7b",
-        "label": "Qwen2.5-VL 7B",
-        "desc": "Vision — can read attached images",
-        "icon": "🖼",
+        "name": "qwen3.5:9b",
+        "label": "Qwen3.5 9B",
+        "desc": "Reasoning & everyday chat — also reads images",
+        "icon": "🧠",
+    },
+    {
+        "name": "gpt-oss:20b",
+        "label": "GPT-OSS 20B",
+        "desc": "OpenAI's open model — strong reasoning & code (text only, close other apps first)",
+        "icon": "🔷",
+    },
+    {
+        "name": "qwen3:8b",
+        "label": "Qwen3 8B",
+        "desc": "Lighter & faster general chat",
+        "icon": "⚡",
     },
 ]
 
@@ -262,11 +280,14 @@ def _known_ollama_paths() -> list:
     pfx86 = os.environ.get("PROGRAMFILES(X86)", "")
     programdata = os.environ.get("PROGRAMDATA", "")
     candidates = [
-        r"C:\ollama-ipex\ollama.exe",
+        # Standard Ollama first: it runs on the Intel Arc GPU via Vulkan and
+        # supports newer models (gemma3, gpt-oss). The old IPEX build (0.9.3)
+        # is kept only as a last-resort fallback.
         os.path.join(local, "Programs", "Ollama", "ollama.exe"),
         os.path.join(pf, "Ollama", "ollama.exe"),
         os.path.join(pfx86, "Ollama", "ollama.exe"),
         os.path.join(programdata, "Ollama", "ollama.exe"),
+        r"C:\ollama-ipex\ollama.exe",
     ]
     return [c for c in candidates if c and os.path.isfile(c)]
 
@@ -367,8 +388,13 @@ def pick_model(preferred: Optional[str] = None) -> Optional[str]:
 
 
 def pick_vision_model() -> Optional[str]:
-    """Return an installed model that can actually read images, if any."""
-    for name in list_models():
+    """Return the best installed model that can actually read images, if any."""
+    installed = list_models()
+    for pref in PREFERRED_VISION_MODELS:
+        for name in installed:
+            if name.lower().startswith(pref):
+                return name
+    for name in installed:
         if is_vision_model(name):
             return name
     return None
@@ -983,15 +1009,41 @@ def _compute_text_height_lines(widget: tk.Text, fnt: tkfont.Font) -> int:
     Converting that back into the widget's own line units (via the
     prose font's line spacing) gives a height that fits everything.
     """
-    try:
-        total_px = int(widget.count("1.0", "end", "ypixels")[0])
-    except Exception:
-        try:
-            return int(widget.count("1.0", "end", "displaylines")[0])
-        except Exception:
-            return 1
     line_px = max(1, fnt.metrics("linespace"))
-    return max(1, -(-total_px // line_px))  # ceil division
+
+    # "update" forces Tk to finish laying out every wrapped line before
+    # counting. Without it, Tk measures long lines lazily in the background
+    # and can report a single line's height for a long reply -- which
+    # showed up as replies cut off after their first line.
+    total_px = _text_count(widget, "update", "ypixels")
+    if total_px is None:
+        total_px = _text_count(widget, "ypixels")
+    if total_px:
+        return max(1, -(-total_px // line_px))  # ceil division
+
+    lines = _text_count(widget, "update", "displaylines")
+    if lines is None:
+        lines = _text_count(widget, "displaylines")
+    return max(1, lines or 1)
+
+
+def _text_count(widget: tk.Text, *options) -> Optional[int]:
+    """Text.count() that works on every Python/Tk version. Depending on the
+    version (and on how many options are passed) it can return an int, a
+    tuple, or None -- the old code assumed a tuple, and on versions that
+    return a plain int it crashed silently and fell back to a height of 1."""
+    try:
+        res = widget.count("1.0", "end", *options)
+    except Exception:
+        return None
+    if res is None:
+        return 0
+    if isinstance(res, (tuple, list)):
+        res = res[-1] if res else 0
+    try:
+        return int(res)
+    except (TypeError, ValueError):
+        return None
 
 
 def _make_text_readonly(widget: tk.Text):
@@ -1739,10 +1791,14 @@ class RyuuApp(tk.Tk):
         (handles case differences like 'qwen2.5-Coder:7b' vs 'qwen2.5-coder:7b',
         and suffix variants like 'qwen3:8b-instruct-q4_0')."""
         target = catalog_name.lower()
-        target_base = target.split(":")[0] + ":"
+        # Exact tag first, so "qwen2.5-coder:14b" never resolves to an
+        # installed "qwen2.5-coder:7b" just because they share a prefix.
         for name in installed:
-            n = name.lower()
-            if n == target or n.startswith(target_base):
+            if name.lower() == target:
+                return name
+        # Then suffix variants of the same size, e.g. "gemma4:12b-it-q4_K_M".
+        for name in installed:
+            if name.lower().startswith(target):
                 return name
         return None
 
@@ -1751,7 +1807,7 @@ class RyuuApp(tk.Tk):
 
     def _open_model_menu(self, anchor: Optional[tk.Widget] = None):
         """Claude-style model picker: a clean floating card listing the
-        curated models (qwen3, qwen2.5-coder, qwen2.5vl), not a native menu."""
+        curated models (see MODEL_CATALOG), not a native menu."""
         anchor = anchor or self.model_btn
 
         popup = tk.Toplevel(self)
@@ -1907,6 +1963,11 @@ class RyuuApp(tk.Tk):
     def _set_model(self, name: str):
         if name == self.session.model:
             return
+        if self.is_typing:
+            # Unloading the model mid-reply would cut the answer off.
+            self.status_var.set("Wait for Ryuu to finish replying before switching models.")
+            return
+        previous = self.session.model
         self.session.model = name
         self.model_btn.config(text=self._model_btn_text())
         self.model_lbl.config(text=self._model_label_text())
@@ -1916,8 +1977,19 @@ class RyuuApp(tk.Tk):
                 settings_btn.config(text=self._model_btn_text())
             except tk.TclError:
                 pass  # settings window was closed
-        self.status_var.set(f"Model switched to {name}.")
-        self.status_var.set(f"Model switched to {name}.")
+
+        # Free the GPU right away: tell Ollama to drop the previous model
+        # from memory now, instead of keeping it loaded for its usual 5
+        # minutes. Only one Ryuu model ever sits on the GPU at a time, so
+        # switching to a big model (e.g. gpt-oss:20b) can't overflow it.
+        self.status_var.set(f"Unloading {previous} from GPU…")
+
+        def _unload():
+            unload_model(previous)
+            self.after(0, lambda: self.status_var.set(
+                f"Model switched to {name} — {previous} unloaded from GPU."))
+
+        threading.Thread(target=_unload, daemon=True).start()
 
     def _on_canvas_resize(self, event):
         self.chat_canvas.itemconfig(self.chat_canvas_window, width=event.width)
@@ -1992,6 +2064,21 @@ class RyuuApp(tk.Tk):
                 break
             height = new_height
             widget.configure(height=height)
+
+        # Safety net: check again once the window has fully settled, and
+        # grow the bubble if anything is still hidden below the fold.
+        def _regrow(w=widget, f=fnt):
+            try:
+                if not w.winfo_exists():
+                    return
+                h = _compute_text_height_lines(w, f)
+                if h > int(w.cget("height")):
+                    w.configure(height=h)
+                    self._scroll_bottom()
+            except tk.TclError:
+                pass
+        widget.after(60, _regrow)
+        widget.after(400, _regrow)
         return widget
 
     # Fenced blocks (```lang\n...\n```) are pulled out first. If this ran in
@@ -2017,6 +2104,28 @@ class RyuuApp(tk.Tk):
                 widget.insert(tk.END, "\n")
             self._embed_code_block(widget, lang, code)
             widget.insert(tk.END, "\n")
+            pos = fm.end()
+        self._insert_inline_markdown(widget, text[pos:])
+
+    # Like _MD_FENCE_RE, but also matches a code block that hasn't been
+    # closed yet (its closing ``` hasn't streamed in), so half-finished
+    # code still renders as code instead of raw backticks.
+    _MD_FENCE_OPEN_RE = re.compile(r"```[ \t]*([A-Za-z0-9_+#.-]*)[ \t]*\n?(.*?)(?:```|\Z)", re.DOTALL)
+
+    def _insert_markdown_stream(self, widget: tk.Text, text: str):
+        """Lightweight renderer for the live (still-streaming) bubble: code
+        blocks become tagged monospace text instead of embedded widgets, so
+        a redraw only changes text and never creates/destroys child
+        windows. The finished reply is re-rendered with full code cards."""
+        pos = 0
+        for fm in self._MD_FENCE_OPEN_RE.finditer(text):
+            self._insert_inline_markdown(widget, text[pos:fm.start()])
+            code = fm.group(2)
+            if code.endswith("\n"):
+                code = code[:-1]
+            if widget.index("end-1c") != "1.0" and widget.get("end-2c", "end-1c") != "\n":
+                widget.insert(tk.END, "\n")
+            widget.insert(tk.END, code + "\n", "codeblock")
             pos = fm.end()
         self._insert_inline_markdown(widget, text[pos:])
 
@@ -2282,7 +2391,19 @@ class RyuuApp(tk.Tk):
             "bold", font=(font_normal[0], font_normal[1], "bold"))
         self._stream_label.tag_configure(
             "code", font=("Consolas", 11), background=_darken(RYUU_BUBBLE, 24))
-        self._stream_label.insert("1.0", "▌")
+        # While streaming, code blocks are drawn as tagged text (not as the
+        # separate "card" widgets used in the finished bubble): creating and
+        # destroying those card widgets on every redraw is what made the
+        # red code area flicker.
+        self._stream_label.tag_configure(
+            "codeblock", font=("Consolas", 11), background=_darken(RYUU_BUBBLE, 24),
+            foreground="#e8e6e1", lmargin1=10, lmargin2=10, rmargin=10,
+            spacing1=2, spacing3=2)
+        # The blinking cursor is a tagged character whose *color* toggles,
+        # so blinking never re-lays-out the text (that full redraw every
+        # 500 ms was one source of the flicker).
+        self._stream_label.tag_configure("cursor", foreground="#ffffff")
+        self._stream_label.insert("1.0", "▌", "cursor")
         self._stream_label.configure(state=tk.DISABLED)
         self._stream_label.pack(anchor="w", fill=tk.X)
 
@@ -2292,45 +2413,81 @@ class RyuuApp(tk.Tk):
         self._stream_ts.pack(anchor="e")
 
         self._stream_text = ""
+        self._stream_rendered = None      # last text actually drawn
+        self._stream_render_job = None    # pending (throttled) redraw
+        self._stream_height = 1           # bubble only ever grows mid-stream
         self._cursor_visible = True
         self._blink_job = self.after(500, self._blink_cursor)
         self._scroll_bottom()
+
+    # Redraw the streaming bubble at most this often. Redrawing on every
+    # single token (often 20-50 per second) is what made it flicker.
+    STREAM_REDRAW_MS = 120
 
     def _blink_cursor(self):
         if not hasattr(self, "_stream_label") or not self._stream_label.winfo_exists():
             return
         self._cursor_visible = not self._cursor_visible
-        self._update_stream_label()
+        try:
+            self._stream_label.tag_configure(
+                "cursor", foreground="#ffffff" if self._cursor_visible else RYUU_BUBBLE)
+        except tk.TclError:
+            return
         self._blink_job = self.after(500, self._blink_cursor)
 
     def _append_stream_token(self, token: str):
-        """Called from background thread — schedules UI update."""
+        """Called from background thread — schedules a throttled UI update."""
         self._stream_text += token
-        self._cursor_visible = True  # keep it solid while new tokens land
-        self.after(0, self._update_stream_label)
+        self.after(0, self._schedule_stream_redraw)
+
+    def _schedule_stream_redraw(self):
+        # Batch tokens: if a redraw is already queued, the new token will be
+        # picked up by it -- no extra redraw.
+        if getattr(self, "_stream_render_job", None) is None:
+            self._stream_render_job = self.after(self.STREAM_REDRAW_MS,
+                                                 self._update_stream_label)
 
     def _update_stream_label(self):
-        if hasattr(self, "_stream_label") and self._stream_label.winfo_exists():
-            display = strip_think(self._stream_text)
-            if not display and _THINK_OPEN_RE.search(self._stream_text):
-                display = "…thinking"
-            cursor = "▌" if self._cursor_visible else " "
+        self._stream_render_job = None
+        if not (hasattr(self, "_stream_label") and self._stream_label.winfo_exists()):
+            return
+        display = strip_think(self._stream_text)
+        if not display and _THINK_OPEN_RE.search(self._stream_text):
+            display = "…thinking"
+        if display == self._stream_rendered:
+            return  # nothing new to draw
+        self._stream_rendered = display
 
-            # Re-render as markdown on every token so **bold** / `code`
-            # spans turn into real formatting as soon as their closing
-            # marker arrives, instead of waiting for the message to finish
-            # and get swapped for the finalized rich-text bubble.
-            widget = self._stream_label
-            widget.configure(state=tk.NORMAL)
-            widget.delete("1.0", tk.END)
-            self._insert_markdown(widget, display + cursor)
-            while widget.get("end-2c", "end-1c") == "\n":
-                widget.delete("end-2c", "end-1c")
-            widget.configure(state=tk.DISABLED)
-            widget.configure(height=_compute_text_height_lines(widget, self._stream_font))
-        self._scroll_bottom()
+        # Re-render as markdown so **bold** / `code` spans turn into real
+        # formatting as soon as their closing marker arrives.
+        widget = self._stream_label
+        widget.configure(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        self._insert_markdown_stream(widget, display)
+        while widget.get("end-2c", "end-1c") == "\n":
+            widget.delete("end-2c", "end-1c")
+        widget.insert(tk.END, "▌", "cursor")
+        widget.configure(state=tk.DISABLED)
+
+        # Grow only -- never shrink mid-stream. Shrinking and re-growing as
+        # a line wraps/unwraps made the bubble jump up and down.
+        h = _compute_text_height_lines(widget, self._stream_font)
+        if h > self._stream_height:
+            self._stream_height = h
+            widget.configure(height=h)
+            self._scroll_bottom()
+        elif self.chat_canvas.yview()[1] > 0.98:
+            # Keep following the reply only if the user hasn't scrolled up.
+            self.chat_canvas.yview_moveto(1.0)
 
     def _finalize_stream(self, final_text: Optional[str] = None):
+        job = getattr(self, "_stream_render_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+            self._stream_render_job = None
         if hasattr(self, "_blink_job") and self._blink_job is not None:
             try:
                 self.after_cancel(self._blink_job)

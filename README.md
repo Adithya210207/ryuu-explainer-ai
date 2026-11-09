@@ -1,27 +1,42 @@
 # 🐉 Ryuu Explainer AI
 
-**Ryuu Explainer AI** is an intelligent, multi-modal desktop AI assistant built in Python and Tkinter. Powered by local LLMs (via **Ollama**), Ryuu is designed to help you analyze code, explain complex concepts, parse PDFs, and inspect attached or clipboard-pasted images.
+**Ryuu Explainer AI** is a high-performance, multi-modal desktop AI assistant built with pure Python and Tkinter. Powered by local LLMs running via **Ollama with Vulkan GPU acceleration**, Ryuu delivers low-latency, fully private AI capabilities directly on your local hardware (including Intel Arc GPUs)—with zero cloud calls, zero API subscription fees, and no data leaving your machine.
 
 ---
 
-## ✨ Features
+## ✨ Key Features
 
-- **📷 Multi-Modal Vision Support**:
-  - Drag & drop or attach images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`).
-  - Direct clipboard image pasting (**Ctrl+V**).
-  - Automatic vision model detection (e.g. `llava`, `llama3.2-vision`) with fallback warnings.
+- **⚡ Hardware-Accelerated Local Inference (Vulkan Backend)**:
+  - Powered by standard Ollama leveraging **Vulkan** compute for cross-platform GPU acceleration (optimized for **Intel Arc** integrated & discrete GPUs, as well as AMD and NVIDIA).
+  - Eliminates the constraints of legacy, unmaintained vendor forks (such as older IPEX-LLM builds) while delivering support for the latest open-weights model architectures.
+  - Dedicated async GPU memory management: immediately unloads previous models when switching to prevent VRAM overflow.
 
-- **📄 Document & Code Parser**:
-  - Attach source code files, PDFs, or plain text files.
-  - Context-aware explanations and debugging assistance.
+- **📷 Seamless Multi-Modal & Vision Intelligence**:
+  - Full support for drag-and-drop or attaching images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`) and clipboard pasting (**Ctrl+V**).
+  - **Default Multimodal Engine (`gemma4:12b`)**: Reads images and writes code out of the box with no model swap required.
+  - **Intelligent Vision Borrowing**: If an image is sent while using a text-only model (e.g., `qwen2.5-coder:14b`), Ryuu automatically routes that specific prompt through the best installed vision model (`gemma4`, `qwen3.5`, `qwen3-vl`, `qwen2.5vl`) and returns to your active model seamlessly.
 
-- **⚡ 100% Local & Private**:
-  - Connects directly to local Ollama API (`http://localhost:11434`).
-  - Zero data sent to third-party servers.
+- **💻 Curated Model Catalog**:
+  - ✨ **Gemma 4 12B** (`gemma4:12b`) — Default balanced engine for multimodal reasoning, image parsing, and code writing.
+  - 💻 **Qwen2.5 Coder 14B** (`qwen2.5-coder:14b`) — Specialized for complex software engineering and debugging.
+  - 🧠 **Qwen3.5 9B** (`qwen3.5:9b`) — Fast reasoning and everyday chat with vision support.
+  - 🔷 **GPT-OSS 20B** (`gpt-oss:20b`) — Heavyweight reasoning and deep code analysis.
+  - ⚡ **Qwen3 8B** (`qwen3:8b`) — Lightweight, ultra-responsive conversational model.
 
-- **🎨 Sleek Dark & Light Themes**:
-  - Customizable UI themes, adjustable model parameters (Max Tokens, Temperature, Top-P, Repeat Penalty).
-  - Markdown code highlighting, thought chain (`<think>`) toggles, and chat history export.
+- **🚀 Ultra-Smooth, Flicker-Free UI Engine**:
+  - **Throttled Streaming (120ms Batching)**: Eliminates UI lag and stutter by batching token updates.
+  - **Lightweight Stream Rendering**: Code blocks render as styled monospace text during streaming, swapping to full cards with one-click copy buttons once finalized.
+  - **Open-Fence Markdown Parsing**: Formats partial code blocks mid-stream before the closing ` ``` ` arrives.
+  - **Zero-Redraw Blinking Cursor**: Cursor blink toggles color tags rather than rebuilding widgets, keeping text completely still.
+  - **Dynamic Bubble Height & Truncation Guard**: Custom `_text_count()` and multi-pass re-layout ensure long responses never cut off prematurely.
+
+- **📄 Document & Context Parser**:
+  - Attach source code files, multi-page PDFs, and text documents.
+  - Automatic context management: 16K default context window (`16384` tokens) tuned to keep 12B–14B models entirely within GPU VRAM, expandable in Settings.
+  - Autonomous multi-turn auto-continuation if model reaches output token limits mid-thought.
+
+- **🎨 Modern Dark & Light Terminal Aesthetic**:
+  - Claude-inspired sleek dark theme, collapsible `<think>` thought-process blocks, token usage counters, and persistent conversation history.
 
 ---
 
@@ -29,13 +44,14 @@
 
 ```
 .
-├── Ryuu_ai.py             # Main Desktop Application GUI
-├── Ryuu_ai_Logo.ico       # Application Icon (.ico)
+├── Ryuu_ai.py             # Main Desktop Application GUI & Engine
+├── Ryuu.spec              # PyInstaller Build Specification
+├── Ryuu_ai_Logo.ico       # Desktop Icon (.ico)
 ├── Ryuu_ai_Logo.png       # Application Branding Logo (.png)
 ├── Ryuu_Documentary.pptx  # Architecture & Design Presentation
-├── Ryuu_Setup_Guide.pptx  # Backend & Ollama Setup Presentation
+├── Ryuu_Setup_Guide.pptx  # Backend & GPU Setup Presentation
 ├── requirements.txt       # Python dependencies
-└── README.md              # Documentation
+└── README.md              # Project documentation
 ```
 
 ---
@@ -45,23 +61,30 @@
 ### 1. Prerequisites
 
 - **Python 3.8+**
-- **Ollama**: Download and install from [ollama.com](https://ollama.com).
+- **Ollama**: Download and install the latest official release from [ollama.com](https://ollama.com). Standard builds include Vulkan GPU support for modern GPUs (including Intel Arc).
 
-### 2. Start Ollama Local Server
+### 2. Pull Recommended Models
 
-Make sure your local Ollama engine is running:
+Open PowerShell or terminal and pull your preferred models:
 
 ```bash
-ollama serve
-```
+# Default Multimodal Model (Vision + Code + Chat)
+ollama pull gemma4:12b
 
-*(For vision features, pull a vision-capable model like `ollama pull llama3.2-vision` or `ollama pull llava`).*
+# Advanced Coding Model (Text Only)
+ollama pull qwen2.5-coder:14b
+
+# Fast Reasoning & Chat with Vision
+ollama pull qwen3.5:9b
+```
 
 ### 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
+
+*(Optional dependencies: `Pillow` for image clipboard/rendering, `pypdf` for PDF parsing).*
 
 ### 4. Run Ryuu AI
 
@@ -71,13 +94,16 @@ Launch the desktop assistant:
 python Ryuu_ai.py
 ```
 
+Ryuu will automatically detect running Ollama instances on `localhost:11434`, locate your GPU-accelerated models, and open the desktop interface ready for chat.
+
 ---
 
-## 🛠️ Built With
+## 🛠️ Architecture & Tech Stack
 
-- **Python 3** & **Tkinter / TTK**
-- **Pillow (PIL)** for image processing and clipboard handling
-- **Ollama REST API** for local LLM inference
+- **GUI Framework**: Python `tkinter` & `ttk` (zero heavyweight web views or Electron bloat)
+- **Image Processing**: `Pillow` (PIL) for clipboard paste, thumbnailing, and previewing
+- **Inference Runtime**: Ollama REST API (`/api/chat`, `/api/tags`, `/api/generate`)
+- **Acceleration Backend**: **Vulkan GPU compute** for high-throughput, cross-vendor GPU execution (Intel Arc, AMD, NVIDIA)
 
 ---
 
