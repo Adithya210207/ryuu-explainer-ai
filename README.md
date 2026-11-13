@@ -145,6 +145,8 @@ The app is created at `dist\Ryuu.exe`. It doesn't need Python installed, but it 
 
 This repository is published for portfolio, demonstration, and educational viewing purposes only. You are welcome to view the source code to understand the implementation.
 
+**You MAY** download, install and run it on your own computer for your own **personal, non-commercial use**.
+
 ### You may NOT:
 
 - Copy or reproduce substantial portions of this project.
@@ -152,5 +154,8 @@ This repository is published for portfolio, demonstration, and educational viewi
 - Use this code in commercial projects without prior written permission.
 - Submit this code, or substantially similar code, as your own for academic purposes.
 - Remove copyright notices or claim this work as your own.
+- Share, sell or re-upload it (including copies downloaded for personal use), or change the source code and use or share the changed version.
 
 If you would like to use any part of this project, please contact me first for permission.
+
+The full legal terms are in the [**LICENSE**](LICENSE) file.
